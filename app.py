@@ -7,12 +7,14 @@ import streamlit as st
 from bs4 import BeautifulSoup
 
 
-# ==============================
-# CONFIGURAÇÃO DO APP
-# ==============================
+# =====================================================
+# WISE PART NUMBER FINDER - V2
+# Busca por Part Number com prioridade em fontes OEM/catálogos
+# e usa Mercado Livre apenas como referência de preço/título.
+# =====================================================
 
 st.set_page_config(
-    page_title="Wise Part Number Finder",
+    page_title="Wise Part Number Finder V2",
     page_icon="🔎",
     layout="centered",
 )
@@ -25,33 +27,59 @@ HEADERS = {
     )
 }
 
-PALAVRAS_LADO_DIREITO = ["direito", "direita", "ld", "lado direito", "right"]
-PALAVRAS_LADO_ESQUERDO = ["esquerdo", "esquerda", "le", "lado esquerdo", "left"]
-
 MARCAS = [
-    "Yamaha", "Honda", "Suzuki", "Kawasaki", "Dafra", "BMW", "Harley-Davidson",
-    "Triumph", "KTM", "Royal Enfield", "Haojue", "Shineray", "Kasinski", "Sundown"
+    "Yamaha", "Honda", "Suzuki", "Kawasaki", "Dafra", "BMW",
+    "Harley-Davidson", "Triumph", "KTM", "Royal Enfield",
+    "Haojue", "Shineray", "Kasinski", "Sundown"
 ]
 
-PALAVRAS_RUIDO_TITULO = [
-    "novo", "usado", "promoção", "promocao", "frete", "grátis", "gratis",
-    "envio", "imediato", "original", "genuíno", "genuino", "peça", "peca"
+FONTES_ALTA_CONFIANCA = [
+    "parts catalog", "oem", "fiche", "microfiche", "parts list",
+    "partzilla", "cmsnl", "bike-parts", "yamaha parts", "honda parts",
+    "suzuki parts", "kawasaki parts", "genuine parts", "genuine motorcycle parts",
+    "catálogo", "catalogo", "catálogo de peças", "catalogo de pecas"
+]
+
+MARKETPLACES = [
+    "mercadolivre", "mercado livre", "shopee", "olx", "amazon", "ebay", "aliexpress"
+]
+
+PALAVRAS_LADO_DIREITO = [
+    "direito", "direita", "lado direito", "right", "right hand", "r/h", "rh"
+]
+
+PALAVRAS_LADO_ESQUERDO = [
+    "esquerdo", "esquerda", "lado esquerdo", "left", "left hand", "l/h", "lh"
 ]
 
 
-# ==============================
-# FUNÇÕES DE LIMPEZA E EXTRAÇÃO
-# ==============================
+# =====================================================
+# LIMPEZA E NORMALIZAÇÃO
+# =====================================================
 
 def limpar_part_number(codigo: str) -> str:
     return codigo.strip().upper().replace(" ", "")
 
 
 def normalizar_texto(texto: str) -> str:
+    texto = texto or ""
     texto = texto.replace("\n", " ").replace("\t", " ")
     texto = re.sub(r"\s+", " ", texto)
     return texto.strip()
 
+
+def texto_total_resultados(resultados: list[dict]) -> str:
+    partes = []
+    for r in resultados:
+        partes.append(r.get("titulo", ""))
+        partes.append(r.get("snippet", ""))
+        partes.append(r.get("link", ""))
+    return " ".join(partes)
+
+
+# =====================================================
+# IDENTIFICAÇÃO DA PEÇA
+# =====================================================
 
 def detectar_marca(texto: str) -> str:
     texto_lower = texto.lower()
@@ -88,110 +116,105 @@ def detectar_anos(texto: str) -> str:
     return f"{anos[0]} a {anos[-1]}"
 
 
-def extrair_modelos(textos: list[str], marca: str) -> str:
-    texto_total = " ".join(textos)
-
+def extrair_modelos(texto: str) -> str:
     padroes_modelo = [
-        r"\bMT[- ]?03\b",
-        r"\bMT[- ]?07\b",
-        r"\bMT[- ]?09\b",
-        r"\bYZF[- ]?R3\b",
-        r"\bR3\b",
-        r"\bFZ25\b",
-        r"\bFazer\s?250\b",
-        r"\bFazer\s?150\b",
-        r"\bFactor\s?150\b",
-        r"\bNMAX\s?160\b",
-        r"\bXJ6\b",
-        r"\bCB\s?300\b",
-        r"\bCB\s?500F\b",
-        r"\bCB\s?500X\b",
-        r"\bCG\s?160\b",
-        r"\bCG\s?150\b",
-        r"\bBiz\s?125\b",
-        r"\bLead\s?110\b",
-        r"\bElite\s?125\b",
+        r"\bMT[- ]?03\b", r"\bMT[- ]?07\b", r"\bMT[- ]?09\b",
+        r"\bYZF[- ]?R3\b", r"\bYZF[- ]?R1\b", r"\bR3\b",
+        r"\bFZ25\b", r"\bFazer\s?250\b", r"\bFazer\s?150\b",
+        r"\bFactor\s?150\b", r"\bNMAX\s?160\b", r"\bXJ6\b",
+        r"\bXTZ\s?250\b", r"\bLander\s?250\b",
+        r"\bCB\s?300\b", r"\bCB\s?500F\b", r"\bCB\s?500X\b",
+        r"\bCBR\s?500R\b", r"\bCG\s?160\b", r"\bCG\s?150\b",
+        r"\bBiz\s?125\b", r"\bBiz\s?110\b", r"\bLead\s?110\b",
+        r"\bElite\s?125\b", r"\bPCX\s?150\b", r"\bPCX\s?160\b",
+        r"\bXRE\s?300\b", r"\bBros\s?160\b", r"\bNXR\s?160\b",
         r"\bApache\s?150\b",
     ]
 
     encontrados = []
     for padrao in padroes_modelo:
-        matches = re.findall(padrao, texto_total, flags=re.IGNORECASE)
+        matches = re.findall(padrao, texto, flags=re.IGNORECASE)
         encontrados.extend(matches)
 
-    encontrados = list(dict.fromkeys([m.upper().replace("  ", " ") for m in encontrados]))
+    modelos = []
+    for item in encontrados:
+        item = normalizar_texto(item.upper().replace("- ", "-").replace("  ", " "))
+        if item not in modelos:
+            modelos.append(item)
 
-    if encontrados:
-        return " / ".join(encontrados[:4])
-
-    return "Não identificado"
+    return " / ".join(modelos[:4]) if modelos else "Não identificado"
 
 
-def inferir_nome_peca(textos: list[str]) -> str:
-    texto = " ".join(textos).lower()
+def inferir_nome_peca(texto: str) -> str:
+    texto_lower = texto.lower()
 
     mapa_pecas = {
-        "carenagem": ["carenagem", "aba", "lateral", "capa lateral"],
-        "paralama": ["paralama", "para-lama"],
-        "farol": ["farol", "bloco óptico", "bloco optico"],
-        "lanterna": ["lanterna", "sinaleira traseira"],
-        "pisca": ["pisca", "seta", "sinalizador"],
-        "retrovisor": ["retrovisor", "espelho"],
-        "manete": ["manete", "alavanca"],
-        "manicoto": ["manicoto", "suporte manete"],
-        "pedal de freio": ["pedal de freio"],
-        "pedal de câmbio": ["pedal de cambio", "pedal de câmbio"],
-        "tampa lateral": ["tampa lateral"],
-        "protetor de escapamento": ["protetor escapamento", "protetor de escape", "capa escapamento"],
-        "painel": ["painel", "velocímetro", "velocimetro"],
-        "tanque": ["tanque"],
-        "rabeta": ["rabeta"],
-        "bengala": ["bengala", "cilindro interno"],
+        "Carenagem": ["carenagem", "cover", "cowling", "fairing", "aba", "capa lateral"],
+        "Paralama": ["paralama", "para-lama", "fender", "mudguard"],
+        "Farol": ["farol", "headlight", "bloco óptico", "bloco optico"],
+        "Lanterna": ["lanterna", "tail light", "taillight"],
+        "Pisca": ["pisca", "seta", "turn signal", "sinalizador", "indicator"],
+        "Retrovisor": ["retrovisor", "mirror", "espelho"],
+        "Manete": ["manete", "lever", "alavanca"],
+        "Manicoto": ["manicoto", "holder", "suporte manete"],
+        "Pedal De Freio": ["pedal de freio", "brake pedal"],
+        "Pedal De Câmbio": ["pedal de cambio", "pedal de câmbio", "shift pedal", "gear pedal"],
+        "Tampa Lateral": ["tampa lateral", "side cover"],
+        "Protetor De Escapamento": ["protetor escapamento", "protetor de escape", "heat guard", "muffler cover"],
+        "Painel": ["painel", "speedometer", "velocímetro", "velocimetro", "meter assy"],
+        "Tanque": ["tanque", "fuel tank"],
+        "Rabeta": ["rabeta", "rear cowl", "rear cover"],
+        "Bengala": ["bengala", "front fork", "fork pipe"],
+        "Suporte": ["suporte", "bracket", "stay"],
+        "Tampa": ["tampa", "cap", "cover"],
     }
 
     for nome, termos in mapa_pecas.items():
-        if any(termo in texto for termo in termos):
-            return nome.title()
+        if any(termo in texto_lower for termo in termos):
+            return nome
 
     return "Peça"
 
 
-def limitar_titulo_60(titulo: str) -> str:
-    titulo = normalizar_texto(titulo)
-    if len(titulo) <= 60:
-        return titulo
+# =====================================================
+# CONFIANÇA DAS FONTES
+# =====================================================
 
-    substituicoes = {
-        "Esquerda": "Esq",
-        "Esquerdo": "Esq",
-        "Direita": "Dir",
-        "Direito": "Dir",
-        "Original": "Orig",
-        "Yamaha": "Yam",
-        "Honda": "Honda",
-    }
+def calcular_confianca_fonte(titulo: str, snippet: str, link: str) -> str:
+    texto = f"{titulo} {snippet} {link}".lower()
 
-    for antigo, novo in substituicoes.items():
-        titulo = titulo.replace(antigo, novo)
-        if len(titulo) <= 60:
-            return titulo
+    if any(fonte in texto for fonte in FONTES_ALTA_CONFIANCA):
+        return "Alta"
 
-    return titulo[:60].rstrip()
+    if any(market in texto for market in MARKETPLACES):
+        return "Baixa"
+
+    return "Média"
 
 
-# ==============================
-# BUSCA WEB GERAL
-# ==============================
+def calcular_confianca_final(resultados: list[dict]) -> str:
+    confiancas = [r.get("confianca", "Baixa") for r in resultados]
 
-def buscar_web_duckduckgo(part_number: str, limite: int = 8) -> list[dict]:
-    """
-    Busca resultados públicos usando DuckDuckGo HTML.
-    Observação: pode falhar se o buscador bloquear requisições automatizadas.
-    """
-    query = quote_plus(
-    f'"{part_number}" "parts catalog" OR "OEM" OR "fiche" OR "catálogo de peças"'
-)
-    url = f"https://duckduckgo.com/html/?q={query}"
+    if "Alta" in confiancas:
+        return "Alta"
+    if "Média" in confiancas:
+        return "Média"
+    if resultados:
+        return "Baixa"
+    return "Não encontrado"
+
+
+def ordenar_resultados_por_confianca(resultados: list[dict]) -> list[dict]:
+    ordem = {"Alta": 0, "Média": 1, "Baixa": 2}
+    return sorted(resultados, key=lambda r: ordem.get(r.get("confianca", "Baixa"), 3))
+
+
+# =====================================================
+# BUSCA WEB OEM / CATÁLOGOS
+# =====================================================
+
+def buscar_duckduckgo(query_texto: str, limite: int = 8) -> list[dict]:
+    url = f"https://duckduckgo.com/html/?q={quote_plus(query_texto)}"
 
     try:
         response = requests.get(url, headers=HEADERS, timeout=15)
@@ -212,20 +235,46 @@ def buscar_web_duckduckgo(part_number: str, limite: int = 8) -> list[dict]:
         snippet = normalizar_texto(snippet_tag.get_text(" ")) if snippet_tag else ""
 
         if titulo or snippet:
+            confianca = calcular_confianca_fonte(titulo, snippet, link)
             resultados.append({
                 "titulo": titulo,
                 "link": link,
                 "snippet": snippet,
+                "confianca": confianca,
             })
 
     return resultados
 
 
-# ==============================
-# BUSCA MERCADO LIVRE
-# ==============================
+def buscar_fontes_oem(part_number: str) -> list[dict]:
+    consultas = [
+        f'"{part_number}" "parts catalog"',
+        f'"{part_number}" OEM motorcycle part',
+        f'"{part_number}" fiche motorcycle',
+        f'"{part_number}" "genuine parts" motorcycle',
+        f'"{part_number}" "catálogo de peças"',
+        f'"{part_number}" Honda Yamaha Suzuki Kawasaki Dafra',
+    ]
 
-def buscar_mercado_livre(termo: str, limite: int = 20) -> list[dict]:
+    todos = []
+    links_vistos = set()
+
+    for consulta in consultas:
+        resultados = buscar_duckduckgo(consulta, limite=6)
+        for r in resultados:
+            chave = r.get("link") or r.get("titulo")
+            if chave and chave not in links_vistos:
+                todos.append(r)
+                links_vistos.add(chave)
+
+    return ordenar_resultados_por_confianca(todos)
+
+
+# =====================================================
+# MERCADO LIVRE
+# =====================================================
+
+def buscar_mercado_livre(termo: str, limite: int = 30) -> list[dict]:
     url = f"https://api.mercadolibre.com/sites/MLB/search?q={quote_plus(termo)}&limit={limite}"
 
     try:
@@ -256,34 +305,31 @@ def buscar_mercado_livre(termo: str, limite: int = 20) -> list[dict]:
 def filtrar_anuncios_relevantes(anuncios: list[dict], part_number: str, peca: str, marca: str, modelo: str) -> list[dict]:
     relevantes = []
     pn_limpo = part_number.lower().replace("-", "")
-    termos_obrigatorios = []
-
-    if marca != "Não identificado":
-        termos_obrigatorios.append(marca.lower())
-
-    if peca != "Peça":
-        termos_obrigatorios.append(peca.lower())
 
     for anuncio in anuncios:
         titulo = anuncio["titulo"].lower()
         titulo_limpo = titulo.replace("-", "")
-
         pontos = 0
 
         if pn_limpo in titulo_limpo:
-            pontos += 4
+            pontos += 5
 
-        for termo in termos_obrigatorios:
-            if termo in titulo:
-                pontos += 2
+        if marca != "Não identificado" and marca.lower() in titulo:
+            pontos += 2
+
+        if peca != "Peça" and peca.lower() in titulo:
+            pontos += 2
 
         if modelo != "Não identificado":
             for parte_modelo in modelo.lower().split("/"):
-                if parte_modelo.strip() and parte_modelo.strip() in titulo:
+                parte_modelo = parte_modelo.strip()
+                if parte_modelo and parte_modelo in titulo:
                     pontos += 2
 
         if pontos >= 2:
-            relevantes.append(anuncio | {"score": pontos})
+            anuncio_com_score = dict(anuncio)
+            anuncio_com_score["score"] = pontos
+            relevantes.append(anuncio_com_score)
 
     relevantes.sort(key=lambda x: x["score"], reverse=True)
     return relevantes
@@ -293,16 +339,12 @@ def calcular_media_precos(anuncios: list[dict]) -> dict:
     precos = [a["preco"] for a in anuncios if a.get("preco")]
 
     if not precos:
-        return {
-            "media": None,
-            "mediana": None,
-            "minimo": None,
-            "maximo": None,
-            "quantidade": 0,
-        }
+        return {"media": None, "mediana": None, "minimo": None, "maximo": None, "quantidade": 0}
 
-    # Remove extremos muito fora da curva quando houver volume
     precos_ordenados = sorted(precos)
+
+    # Remove o menor e o maior valor quando houver volume suficiente,
+    # para reduzir distorção de anúncios fora da realidade.
     if len(precos_ordenados) >= 6:
         precos_filtrados = precos_ordenados[1:-1]
     else:
@@ -317,13 +359,40 @@ def calcular_media_precos(anuncios: list[dict]) -> dict:
     }
 
 
-# ==============================
-# GERAÇÃO DO ANÚNCIO
-# ==============================
+def dinheiro(valor: float) -> str:
+    return f"R$ {valor:.2f}".replace(".", ",")
+
+
+# =====================================================
+# GERAÇÃO DE TÍTULO / DESCRIÇÃO
+# =====================================================
+
+def limitar_titulo_60(titulo: str) -> str:
+    titulo = normalizar_texto(titulo)
+    if len(titulo) <= 60:
+        return titulo
+
+    substituicoes = {
+        "Esquerda": "Esq",
+        "Esquerdo": "Esq",
+        "Direita": "Dir",
+        "Direito": "Dir",
+        "Original": "Orig",
+        "Carenagem": "Carenag",
+        "Paralama": "Paralam",
+        "Yamaha": "Yam",
+    }
+
+    for antigo, novo in substituicoes.items():
+        titulo = titulo.replace(antigo, novo)
+        if len(titulo) <= 60:
+            return titulo
+
+    return titulo[:60].rstrip()
+
 
 def gerar_titulo(peca: str, lado: str, marca: str, modelo: str) -> str:
     partes = []
-
     partes.append(peca if peca != "Peça" else "Peça")
 
     if lado in ["Direito", "Esquerdo"]:
@@ -333,19 +402,18 @@ def gerar_titulo(peca: str, lado: str, marca: str, modelo: str) -> str:
         partes.append(marca)
 
     if modelo != "Não identificado":
-        modelo_principal = modelo.split("/")[0].strip()
-        partes.append(modelo_principal)
+        partes.append(modelo.split("/")[0].strip())
 
     partes.append("Original")
 
     return limitar_titulo_60(" ".join(partes))
 
 
-def gerar_descricao(peca: str, marca: str, modelo: str, anos: str, lado: str, part_number: str) -> str:
+def gerar_descricao(peca: str, marca: str, modelo: str, anos: str, lado: str, part_number: str, confianca: str) -> str:
     nome_peca = peca if peca != "Peça" else "Peça"
+    lado_txt = f" {lado}" if lado in ["Direito", "Esquerdo"] else ""
     marca_txt = marca if marca != "Não identificado" else ""
     modelo_txt = modelo if modelo != "Não identificado" else "modelo compatível"
-    lado_txt = f" {lado}" if lado in ["Direito", "Esquerdo"] else ""
     anos_txt = f" ({anos})" if anos != "Não identificado" else ""
 
     return f"""Esse anúncio contém: 01 {nome_peca}{lado_txt} {marca_txt} {modelo_txt}{anos_txt} - ORIGINAL
@@ -359,6 +427,8 @@ Marca: {marca}
 Modelo: {modelo}
 Ano: {anos}
 Lado: {lado}
+Código OEM: {part_number}
+Nível de confiança da identificação: {confianca}
 
 Peça original retirada de veículo adquirido em leilão/sucata legalizada, com procedência e nota fiscal.
 
@@ -366,54 +436,54 @@ Antes da compra, confira o código da peça e compare com a peça da sua moto pa
 
 
 def gerar_palavras_chave(peca: str, marca: str, modelo: str, anos: str, lado: str, part_number: str) -> str:
-    termos = [part_number, peca, marca, modelo, anos, lado, "original", "peça usada", "moto"]
+    termos = [part_number, peca, marca, modelo, anos, lado, "original", "peça usada", "moto", "OEM"]
     termos = [t for t in termos if t and t not in ["Não identificado", "Sem lado identificado"]]
     return ", ".join(dict.fromkeys(termos))
 
 
-# ==============================
+# =====================================================
 # INTERFACE STREAMLIT
-# ==============================
+# =====================================================
 
-st.title("🔎 Wise Part Number Finder")
-st.caption("Digite o código da peça e o app busca informações, preço médio e gera anúncio para Mercado Livre.")
+st.title("🔎 Wise Part Number Finder V2")
+st.caption("Digite o código da peça. O app prioriza catálogo/OEM e usa Mercado Livre apenas para preço e referência comercial.")
 
-part_number_input = st.text_input("Digite o Part Number", placeholder="Ex: BK6-F117W-00")
+part_number_input = st.text_input("Digite o Part Number", placeholder="Ex: 64320-K2G-9200")
 
 if part_number_input:
     part_number = limpar_part_number(part_number_input)
 
-    with st.spinner("Buscando informações da peça na web e no Mercado Livre..."):
-        resultados_web = buscar_web_duckduckgo(part_number)
+    with st.spinner("Buscando em catálogos/OEM, web pública e Mercado Livre..."):
+        resultados_web = buscar_fontes_oem(part_number)
+        texto_web = texto_total_resultados(resultados_web)
 
-        textos_web = []
-        for r in resultados_web:
-            textos_web.append(r.get("titulo", ""))
-            textos_web.append(r.get("snippet", ""))
+        confianca_final = calcular_confianca_final(resultados_web)
+        marca = detectar_marca(texto_web)
+        lado = detectar_lado(texto_web)
+        anos = detectar_anos(texto_web)
+        modelo = extrair_modelos(texto_web)
+        peca = inferir_nome_peca(texto_web)
 
-        texto_total_web = " ".join(textos_web)
+        anuncios_pn = buscar_mercado_livre(part_number, limite=30)
 
-        marca = detectar_marca(texto_total_web)
-        lado = detectar_lado(texto_total_web)
-        anos = detectar_anos(texto_total_web)
-        modelo = extrair_modelos(textos_web, marca)
-        peca = inferir_nome_peca(textos_web)
+        termo_nome = " ".join([
+            item for item in [
+                peca,
+                marca,
+                modelo.split("/")[0].strip() if modelo != "Não identificado" else ""
+            ]
+            if item and item != "Não identificado" and item != "Peça"
+        ])
 
-        termo_ml_1 = part_number
-        anuncios_pn = buscar_mercado_livre(termo_ml_1, limite=20)
-
-        termo_ml_2 = " ".join([x for x in [peca, marca, modelo.split("/")[0].strip() if modelo != "Não identificado" else ""] if x and x != "Não identificado"])
-        anuncios_nome = buscar_mercado_livre(termo_ml_2, limite=20) if termo_ml_2 else []
+        anuncios_nome = buscar_mercado_livre(termo_nome, limite=30) if termo_nome else []
 
         anuncios_total = anuncios_pn + anuncios_nome
         anuncios_relevantes = filtrar_anuncios_relevantes(anuncios_total, part_number, peca, marca, modelo)
-
-        # Caso o filtro fique rígido demais, usa os anúncios pelo part number
         anuncios_para_preco = anuncios_relevantes if anuncios_relevantes else anuncios_pn
         preco_info = calcular_media_precos(anuncios_para_preco)
 
         titulo_ml = gerar_titulo(peca, lado, marca, modelo)
-        descricao = gerar_descricao(peca, marca, modelo, anos, lado, part_number)
+        descricao = gerar_descricao(peca, marca, modelo, anos, lado, part_number, confianca_final)
         palavras_chave = gerar_palavras_chave(peca, marca, modelo, anos, lado, part_number)
 
     st.subheader("Informações identificadas")
@@ -423,17 +493,25 @@ if part_number_input:
         st.write(f"**Código:** {part_number}")
         st.write(f"**Peça:** {peca}")
         st.write(f"**Marca:** {marca}")
+        st.write(f"**Confiança:** {confianca_final}")
     with col2:
         st.write(f"**Modelo:** {modelo}")
         st.write(f"**Ano:** {anos}")
         st.write(f"**Lado:** {lado}")
 
+    if confianca_final in ["Baixa", "Não encontrado"]:
+        st.warning("A identificação ainda não está totalmente confiável. Confira o código OEM antes de publicar.")
+    elif confianca_final == "Média":
+        st.info("Identificação com confiança média. Recomendado conferir as fontes antes de publicar.")
+    else:
+        st.success("Identificação com confiança alta por fonte compatível com catálogo/OEM.")
+
     st.subheader("Média de valores Mercado Livre")
 
     if preco_info["media"]:
-        st.write(f"**Preço médio:** R$ {preco_info['media']:.2f}".replace(".", ","))
-        st.write(f"**Mediana:** R$ {preco_info['mediana']:.2f}".replace(".", ","))
-        st.write(f"**Faixa analisada:** R$ {preco_info['minimo']:.2f} a R$ {preco_info['maximo']:.2f}".replace(".", ","))
+        st.write(f"**Preço médio:** {dinheiro(preco_info['media'])}")
+        st.write(f"**Mediana:** {dinheiro(preco_info['mediana'])}")
+        st.write(f"**Faixa analisada:** {dinheiro(preco_info['minimo'])} a {dinheiro(preco_info['maximo'])}")
         st.write(f"**Anúncios considerados:** {preco_info['quantidade']}")
     else:
         st.warning("Não foi possível calcular uma média confiável com os anúncios encontrados.")
@@ -448,24 +526,22 @@ if part_number_input:
     st.subheader("Palavras-chave")
     st.text_area("Palavras-chave", palavras_chave, height=100)
 
-    st.subheader("Fontes encontradas na web")
+    st.subheader("Fontes encontradas")
     if resultados_web:
-        for r in resultados_web[:5]:
-            st.markdown(f"- [{r['titulo']}]({r['link']})")
+        for r in resultados_web[:10]:
+            emoji = "🟢" if r["confianca"] == "Alta" else "🟡" if r["confianca"] == "Média" else "🔴"
+            st.markdown(f"{emoji} **Confiança {r['confianca']}** — [{r['titulo']}]({r['link']})")
             if r.get("snippet"):
                 st.caption(r["snippet"])
     else:
-        st.info("Nenhuma fonte web encontrada pelo buscador público. Tente o código com hífen ou sem hífen.")
+        st.info("Nenhuma fonte web encontrada. Tente o código com hífen ou sem hífen.")
 
-    st.subheader("Anúncios usados como referência")
+    st.subheader("Anúncios Mercado Livre usados como referência")
     if anuncios_para_preco:
-        for a in anuncios_para_preco[:8]:
-            preco_fmt = f"R$ {a['preco']:.2f}".replace(".", ",")
-            st.markdown(f"- [{a['titulo']}]({a['link']}) — **{preco_fmt}**")
+        for a in anuncios_para_preco[:10]:
+            st.markdown(f"- [{a['titulo']}]({a['link']}) — **{dinheiro(a['preco'])}**")
     else:
         st.info("Nenhum anúncio encontrado no Mercado Livre para esse código/peça.")
 
-
 st.divider()
-st.caption("Observação: o app cruza fontes públicas e anúncios ativos. Sempre confira o código OEM e as fotos antes de publicar.")
-
+st.caption("Observação: o app prioriza fontes de catálogo/OEM, mas a conferência final do código e fotos ainda é recomendada.")
