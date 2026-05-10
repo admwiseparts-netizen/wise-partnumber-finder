@@ -188,7 +188,9 @@ def buscar_web_duckduckgo(part_number: str, limite: int = 8) -> list[dict]:
     Busca resultados públicos usando DuckDuckGo HTML.
     Observação: pode falhar se o buscador bloquear requisições automatizadas.
     """
-    query = quote_plus(f'"{part_number}" motorcycle part OEM')
+    query = quote_plus(
+    f'"{part_number}" "parts catalog" OR "OEM" OR "fiche" OR "catálogo de peças"'
+)
     url = f"https://duckduckgo.com/html/?q={query}"
 
     try:
